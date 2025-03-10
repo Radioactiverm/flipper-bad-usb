@@ -1,1 +1,4 @@
-# flipper-bad-usb
+# 🐬 | Flipper Bad Usb Payloads
+> [!WARNING]
+> THIS REPO IS BEING BUILT
+NONE OF THE FILES ARE FUNTCINAL YET
