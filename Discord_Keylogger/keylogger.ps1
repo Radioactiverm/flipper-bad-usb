@@ -1,5 +1,5 @@
 param (
-    [string]$webhook
+    [string]$-webhook
 )
 
 if (-not $webhook) {
